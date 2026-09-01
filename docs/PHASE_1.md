@@ -1,4 +1,6 @@
-# Phase 1 — Core Video Pipeline
+# Phase 1A — Core Video Pipeline Baseline
+
+This is the first implementation slice of PRD Phase 1, **not the Phase 1 exit point**.
 
 ## Implemented baseline
 
@@ -18,13 +20,28 @@ dependency and a downloaded model. The default no-model mode produces metadata a
 observations. Collision and stop detection are not yet implemented because they need reliable
 trajectories and real test footage.
 
-## Next implementation steps
+The following PRD Phase 1 requirements are still pending:
 
-1. Run YOLO on controlled RC-car footage and record detection failure cases.
-2. Replace or augment IoU matching with ByteTrack once detections are validated.
-3. Add trajectory-derived stop, direction-change, and path-convergence candidates.
-4. Connect Phase 0 offsets so local observation timestamps map to unified incident time.
-5. Add batch processing for all camera sources in one investigation.
+- investigation-scoped video upload;
+- OpenCV processing integration;
+- manual synchronization adjustment;
+- persistent investigation/evidence records;
+- an end-to-end investigation flow.
+
+## Phase 1 exit criterion
+
+Phase 1 is complete only when one investigation works end to end: create an investigation, upload
+its video evidence, process it, detect and track supported objects, generate simple events, review
+the results, and manually correct synchronization when required.
+
+## Next implementation steps, in PRD order
+
+1. Add investigation and evidence models plus a local FastAPI upload flow.
+2. Add OpenCV processing and run YOLO on controlled RC-car footage.
+3. Replace or augment IoU matching with ByteTrack once detections are validated.
+4. Add simple trajectory-derived stop and direction-change candidates.
+5. Add manual synchronization adjustment and persist the corrected offset separately.
+6. Process all camera sources within one investigation end to end.
 
 Every derived event must retain its supporting frame and confidence. None of these events should
 be described as legal fault or liability.

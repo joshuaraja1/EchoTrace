@@ -66,7 +66,7 @@ Ground truth is a JSON object mapping source paths or unique filenames to offset
 
 The real-world decision gate is documented in [docs/PHASE_0.md](docs/PHASE_0.md).
 
-## Phase 1 video pipeline
+## Phase 1A video pipeline
 
 The first Phase 1 slice can probe a video, sample evidence frames, run an optional YOLO model,
 track detections within that video, and emit a basic evidence-linked timeline:
@@ -88,4 +88,5 @@ echotrace-process-video camera-a.mp4 \
   --model yolo11n.pt
 ```
 
-See [docs/PHASE_1.md](docs/PHASE_1.md) for the completed boundary and next steps.
+See [docs/PHASE_1.md](docs/PHASE_1.md) for the implemented slice, remaining Phase 1 gate, and next
+steps. [docs/ROADMAP.md](docs/ROADMAP.md) is the canonical PRD implementation sequence.
