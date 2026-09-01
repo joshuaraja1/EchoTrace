@@ -12,9 +12,12 @@ dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6"]
+vision = ["ultralytics>=8.3"]
 
 [project.scripts]
 echotrace-sync = "echotrace_sync.cli:main"
+echotrace-evaluate-sync = "echotrace_sync.evaluation:main"
+echotrace-process-video = "echotrace_video.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

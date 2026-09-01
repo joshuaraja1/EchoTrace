@@ -51,5 +51,41 @@ pytest
 ruff check .
 ```
 
-The next real-world gate is documented in [docs/PHASE_0.md](docs/PHASE_0.md).
+Evaluate estimated offsets against measured ground truth:
 
+```bash
+echotrace-evaluate-sync artifacts/synchronization.json ground-truth.json \
+  --output artifacts/evaluation.json
+```
+
+Ground truth is a JSON object mapping source paths or unique filenames to offsets:
+
+```json
+{"camera-a.mp4": 0.0, "camera-b.mp4": 7.14, "camera-c.mp4": 13.02}
+```
+
+The real-world decision gate is documented in [docs/PHASE_0.md](docs/PHASE_0.md).
+
+## Phase 1 video pipeline
+
+The first Phase 1 slice can probe a video, sample evidence frames, run an optional YOLO model,
+track detections within that video, and emit a basic evidence-linked timeline:
+
+```bash
+echotrace-process-video camera-a.mp4 \
+  --output artifacts/camera-a \
+  --sample-fps 2
+```
+
+The default detector is `none`, which verifies metadata and frame extraction without downloading
+a model. To enable vehicle/person detection:
+
+```bash
+pip install -e '.[vision]'
+echotrace-process-video camera-a.mp4 \
+  --output artifacts/camera-a \
+  --detector yolo \
+  --model yolo11n.pt
+```
+
+See [docs/PHASE_1.md](docs/PHASE_1.md) for the completed boundary and next steps.
