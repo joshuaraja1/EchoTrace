@@ -9,4 +9,5 @@ build/
 *.egg-info/
 graphify-out/
 artifacts/
-
+data/
+models/

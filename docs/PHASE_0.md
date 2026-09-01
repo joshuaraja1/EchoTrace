@@ -23,6 +23,12 @@ Save one JSON result per trial under `artifacts/phase-0/` and calculate:
 - failure rate (`confidence < 0.5` or error above 0.5 seconds);
 - conditions associated with failures (missing audio, clipping, distance, wind, echo).
 
+Run the evaluator after each synchronization:
+
+```bash
+echotrace-evaluate-sync synchronization.json ground-truth.json --output evaluation.json
+```
+
 ## Scope of this spike
 
 Included now: FFmpeg audio extraction, pairwise offset estimation, confidence diagnostics,
@@ -31,9 +37,11 @@ multi-source manifest, and ground-truth unit tests.
 Deferred until the audio baseline is measured: metadata fusion, visual-event matching,
 trajectory matching, object detection, tracking, backend APIs, database, and frontend.
 
+Automated and synthetic verification confirms that the software can recover known offsets. It
+does **not** satisfy the decision gate above; that requires independently recorded camera audio.
+
 ## Interpretation
 
 Low confidence is a usable result, not an error to conceal. It should trigger manual alignment
 or a later visual synchronization method. EchoTrace reconstructs evidence; it does not assign
 fault or liability.
-
