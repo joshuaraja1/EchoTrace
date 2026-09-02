@@ -1,6 +1,6 @@
-# Phase 1A — Core Video Pipeline Baseline
+# Phase 1 — Basic Reconstruction Engine
 
-This is the first implementation slice of PRD Phase 1, **not the Phase 1 exit point**.
+The Phase 1 software exit criterion is implemented and covered by an end-to-end API test.
 
 ## Implemented baseline
 
@@ -11,6 +11,13 @@ This is the first implementation slice of PRD Phase 1, **not the Phase 1 exit po
 - Lightweight IoU identity tracking within one camera.
 - First/last appearance events with timestamp, confidence, track ID, and frame citation.
 - JSON analysis artifact suitable for a future backend or synchronized timeline.
+- SQLite-backed investigations and evidence records.
+- Investigation-scoped MP4/MOV upload with immutable storage and SHA-256 digest.
+- OpenCV brightness, sharpness, and motion analysis for extracted evidence frames.
+- Synchronous investigation processing with analyzed/failed/review status.
+- Manual synchronization adjustment with reviewer note and complete offset history.
+- Investigation status, evidence, objects, timeline, and synchronization endpoints.
+- Simple stop and direction-change candidates with qualified wording and frame evidence.
 
 ## Current limitations
 
@@ -20,28 +27,24 @@ dependency and a downloaded model. The default no-model mode produces metadata a
 observations. Collision and stop detection are not yet implemented because they need reliable
 trajectories and real test footage.
 
-The following PRD Phase 1 requirements are still pending:
-
-- investigation-scoped video upload;
-- OpenCV processing integration;
-- manual synchronization adjustment;
-- persistent investigation/evidence records;
-- an end-to-end investigation flow.
-
 ## Phase 1 exit criterion
 
 Phase 1 is complete only when one investigation works end to end: create an investigation, upload
 its video evidence, process it, detect and track supported objects, generate simple events, review
 the results, and manually correct synchronization when required.
 
-## Next implementation steps, in PRD order
+Verified path: create investigation → upload a real generated MP4 → extract/probe/process frames →
+run OpenCV → detect and track a test vehicle → create evidence-linked events → adjust the offset →
+retrieve the corrected timeline and audit history.
 
-1. Add investigation and evidence models plus a local FastAPI upload flow.
-2. Add OpenCV processing and run YOLO on controlled RC-car footage.
-3. Replace or augment IoU matching with ByteTrack once detections are validated.
-4. Add simple trajectory-derived stop and direction-change candidates.
-5. Add manual synchronization adjustment and persist the corrected offset separately.
-6. Process all camera sources within one investigation end to end.
+## Remaining validation, not missing Phase 1 software
+
+1. Run YOLO on controlled RC-car footage and record detection failure cases.
+2. Decide whether IoU tracking is sufficient or must be replaced with ByteTrack.
+3. Measure event quality on controlled footage before expanding event types.
+4. Complete the real-camera Phase 0 synchronization gate.
+
+These are empirical validation activities. Performance must not be claimed until measured.
 
 Every derived event must retain its supporting frame and confidence. None of these events should
 be described as legal fault or liability.

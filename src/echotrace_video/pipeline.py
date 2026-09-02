@@ -10,6 +10,7 @@ from .detection import Detector, NullDetector
 from .events import detect_track_events
 from .media import extract_frames, probe_video
 from .models import Manifest, Observation
+from .opencv_analysis import analyze_frames
 from .tracking import IoUTracker
 
 
@@ -23,6 +24,7 @@ def process_video(
     metadata = probe_video(video_path)
     frames_dir = output_dir / "frames"
     frames = extract_frames(video_path, frames_dir, sample_fps)
+    frame_analysis = analyze_frames(frames)
     tracker = IoUTracker()
     observations = []
     for index, frame in enumerate(frames):
@@ -44,10 +46,10 @@ def process_video(
         "metadata": metadata.to_dict(),
         "sample_fps": sample_fps,
         "frame_count": len(frames),
+        "frame_analysis": frame_analysis,
         "observations": [item.to_dict() for item in observations],
         "timeline": [item.to_dict() for item in events],
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "analysis.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
-
