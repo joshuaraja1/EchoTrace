@@ -49,7 +49,7 @@ PRD scope:
 - manual synchronization adjustment;
 - one investigation working end to end.
 
-Implemented in Phase 1A:
+Implemented:
 
 - FFprobe metadata extraction;
 - FFmpeg evidence-frame sampling;
@@ -58,21 +58,18 @@ Implemented in Phase 1A:
 - baseline IoU tracking;
 - evidence-linked first/last appearance events;
 - JSON analysis artifacts.
-
-Remaining before Phase 1 completion:
-
-- investigation/evidence persistence and upload API;
-- OpenCV processing path;
-- controlled-footage YOLO validation;
-- production-oriented tracking baseline such as ByteTrack;
-- simple stop and direction-change events;
-- manual synchronization adjustment with audit trail;
-- end-to-end investigation processing.
+- SQLite investigation/evidence persistence;
+- immutable MP4/MOV upload with SHA-256 evidence digest;
+- OpenCV frame quality and motion processing;
+- stop and direction-change event candidates;
+- manual synchronization adjustment with audit history;
+- end-to-end FastAPI investigation processing and review endpoints.
 
 Exit criterion: one investigation can be created, populated with video evidence, processed,
 reviewed, and manually adjusted end to end.
 
-Status: **Phase 1A implemented; Phase 1 remains in progress**.
+Status: **Phase 1 software gate implemented and tested**. Controlled-footage YOLO/tracking quality
+remains an empirical validation task; no accuracy claim has been made.
 
 ## Phase 2 — Automatic synchronization
 
@@ -141,17 +138,17 @@ reported.
 ## Functional requirement traceability
 
 - FR-001 Authentication — Phase 5, pending.
-- FR-002 Investigation creation — Phase 1 backend foundation, pending; UI in Phase 5.
-- FR-003 Evidence upload — Phase 1, pending.
-- FR-004 Video processing — Phase 1A baseline implemented.
+- FR-002 Investigation creation — Phase 1 backend implemented; UI in Phase 5.
+- FR-003 Evidence upload — Phase 1 video upload implemented; other evidence types remain MVP work.
+- FR-004 Video processing — Phase 1 implemented.
 - FR-005 Object detection — adapter implemented; real-footage validation pending.
 - FR-006 Tracking — baseline implemented; upgrade and validation pending.
 - FR-007 Synchronization — Phase 0 audio baseline implemented; Phase 2 fusion pending.
-- FR-008 Event detection — entry/exit baseline implemented; remaining candidate events pending.
+- FR-008 Event detection — entry, exit, stop, and direction-change candidates implemented.
 - FR-009 Timeline generation — Phase 3, pending.
 - FR-010 Multi-camera playback — Phase 5, pending.
 - FR-011 Evidence links — frame citations exist in the baseline; complete timeline links pending.
 - FR-012 Confidence — baseline detection/synchronization confidence exists; fusion pending.
 - FR-013 Incident summary — Phase 4, pending.
 - FR-014 Question answering — Phase 4, pending.
-- FR-015 Human corrections — manual sync begins in Phase 1; full review controls in Phase 5.
+- FR-015 Human corrections — audited manual sync implemented; full review controls in Phase 5.

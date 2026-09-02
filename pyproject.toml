@@ -5,19 +5,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "echotrace-sync"
 version = "0.1.0"
-description = "Phase 0 synchronization feasibility spike for EchoTrace"
+description = "Evidence-backed incident reconstruction pipeline for EchoTrace"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy>=1.24"]
+dependencies = [
+  "fastapi>=0.115",
+  "numpy>=1.24",
+  "opencv-python-headless>=4.10",
+  "python-multipart>=0.0.12",
+  "typing-extensions>=4.8",
+  "uvicorn>=0.30",
+]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["httpx>=0.27", "pytest>=8.0", "ruff>=0.6"]
 vision = ["ultralytics>=8.3"]
 
 [project.scripts]
 echotrace-sync = "echotrace_sync.cli:main"
 echotrace-evaluate-sync = "echotrace_sync.evaluation:main"
 echotrace-process-video = "echotrace_video.cli:main"
+echotrace-api = "echotrace_api.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
