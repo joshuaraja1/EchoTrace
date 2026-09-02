@@ -5,21 +5,40 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing_extensions import Annotated
 
+from echotrace_ai.context import build_evidence_context, filter_context_to_events
+from echotrace_ai.graph import build_evidence_graph
+from echotrace_ai.reasoning import EvidenceReasoner, create_reasoner
+from echotrace_ai.search import EvidenceSearch, create_search
+from echotrace_evidence import process_evidence
+from echotrace_sync.fusion import synchronize_pair
+from echotrace_timeline import build_unified_timeline
 from echotrace_video.detection import Detector, NullDetector
-from echotrace_video.pipeline import process_video
+from echotrace_video.matching import match_tracks
 
+from .auth import TokenError, TokenService, hash_password, verify_password
 from .database import Database, utc_now
-from .schemas import InvestigationCreate, SyncAdjustment
+from .schemas import (
+    InvestigationCreate,
+    LoginRequest,
+    MatchReviewRequest,
+    QuestionRequest,
+    RegisterRequest,
+    SyncAdjustment,
+    SynchronizationRequest,
+)
 
-VIDEO_EXTENSIONS = {".mp4", ".mov"}
+SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".jpg", ".jpeg", ".png", ".txt", ".pdf"}
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 
 
@@ -34,6 +53,9 @@ def _serialize_request(model: InvestigationCreate) -> Dict[str, object]:
 def create_app(
     data_dir: Optional[Path] = None,
     detector_factory: Optional[Callable[[], Detector]] = None,
+    reasoner_factory: Optional[Callable[[], EvidenceReasoner]] = None,
+    search_factory: Optional[Callable[[], EvidenceSearch]] = None,
+    require_auth: bool = True,
 ) -> FastAPI:
     root = Path(data_dir or os.environ.get("ECHOTRACE_DATA_DIR", "data")).resolve()
     uploads = root / "evidence"
@@ -42,61 +64,153 @@ def create_app(
     analysis_root.mkdir(parents=True, exist_ok=True)
     database = Database(root / "echotrace.db")
     detector_factory = detector_factory or NullDetector
+    reasoner_factory = reasoner_factory or create_reasoner
+    search_factory = search_factory or create_search
+    token_service = TokenService.from_data_dir(root)
+    bearer = HTTPBearer(auto_error=False)
 
     app = FastAPI(
-        title="EchoTrace Phase 1 API",
-        version="0.1.0",
+        title="EchoTrace Reconstruction API",
+        version="0.4.0",
         description=(
-            "Local investigation and evidence-processing API. EchoTrace reconstructs evidence; "
+            "Incident reconstruction and evidence-processing API. EchoTrace reconstructs evidence; "
             "it does not determine fault or liability."
         ),
+    )
+    origins = [
+        value.strip()
+        for value in os.environ.get(
+            "ECHOTRACE_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+        ).split(",")
+        if value.strip()
+    ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.state.database = database
     app.state.data_dir = root
 
-    def require_investigation(identifier: str) -> Dict[str, object]:
+    def current_user(
+        credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),  # noqa: B008
+    ) -> Dict[str, object]:
+        if not require_auth:
+            return {"user_id": None, "name": "Local test user"}
+        if credentials is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        try:
+            claims = token_service.verify(credentials.credentials)
+        except TokenError as error:
+            raise HTTPException(status_code=401, detail=str(error)) from error
+        user = database.get_user(str(claims["sub"]))
+        if user is None:
+            raise HTTPException(status_code=401, detail="User no longer exists")
+        return user
+
+    authenticated = Depends(current_user)
+
+    def require_investigation(
+        identifier: str, user: Dict[str, object]
+    ) -> Dict[str, object]:
         investigation = database.get_investigation(identifier)
-        if investigation is None:
+        if investigation is None or (
+            require_auth and investigation.get("user_id") != user["user_id"]
+        ):
             raise HTTPException(status_code=404, detail="Investigation not found")
         return investigation
 
+    def investigation_context(
+        identifier: str, user: Dict[str, object]
+    ) -> Dict[str, object]:
+        investigation = require_investigation(identifier, user)
+        evidence_items = database.list_evidence(identifier)
+        unified_timeline = build_unified_timeline(evidence_items)
+        return build_evidence_context(investigation, evidence_items, unified_timeline)
+
     @app.get("/health")
     def health() -> Dict[str, str]:
-        return {"status": "ok", "phase": "1"}
+        return {"status": "ok", "backend_phase": "4"}
+
+    @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+    def register(payload: RegisterRequest) -> Dict[str, object]:
+        try:
+            user = database.create_user(
+                payload.name, payload.email, hash_password(payload.password)
+            )
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(status_code=409, detail="Email already registered") from error
+        return {
+            "user": user,
+            "access_token": token_service.issue(str(user["user_id"])),
+            "token_type": "bearer",
+        }
+
+    @app.post("/auth/login")
+    def login(payload: LoginRequest) -> Dict[str, object]:
+        user = database.get_user_by_email(payload.email)
+        if user is None or not verify_password(payload.password, str(user["password_hash"])):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        public = {key: value for key, value in user.items() if key != "password_hash"}
+        return {
+            "user": public,
+            "access_token": token_service.issue(str(user["user_id"])),
+            "token_type": "bearer",
+        }
+
+    @app.get("/auth/me")
+    def authenticated_user(
+        user: Dict[str, object] = authenticated,
+    ) -> Dict[str, object]:
+        return user
 
     @app.post("/investigations", status_code=status.HTTP_201_CREATED)
-    def create_investigation(payload: InvestigationCreate) -> Dict[str, object]:
-        return database.create_investigation(_serialize_request(payload))
+    def create_investigation(
+        payload: InvestigationCreate, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        values = _serialize_request(payload)
+        values["user_id"] = user["user_id"]
+        return database.create_investigation(values)
 
     @app.get("/investigations")
-    def list_investigations() -> List[Dict[str, object]]:
-        return database.list_investigations()
+    def list_investigations(
+        user: Dict[str, object] = authenticated,
+    ) -> List[Dict[str, object]]:
+        return database.list_investigations(user["user_id"])
 
     @app.get("/investigations/{investigation_id}")
-    def get_investigation(investigation_id: str) -> Dict[str, object]:
-        investigation = require_investigation(investigation_id)
+    def get_investigation(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        investigation = require_investigation(investigation_id, user)
         investigation["evidence"] = database.list_evidence(investigation_id)
         return investigation
 
     @app.delete("/investigations/{investigation_id}", status_code=status.HTTP_204_NO_CONTENT)
-    def delete_investigation(investigation_id: str) -> JSONResponse:
-        require_investigation(investigation_id)
+    def delete_investigation(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Response:
+        require_investigation(investigation_id, user)
         database.delete_investigation(investigation_id)
-        return JSONResponse(status_code=204, content=None)
+        return Response(status_code=204)
 
     @app.post(
         "/investigations/{investigation_id}/evidence", status_code=status.HTTP_201_CREATED
     )
     async def upload_evidence(
-        investigation_id: str, file: Annotated[UploadFile, File()]
+        investigation_id: str,
+        file: Annotated[UploadFile, File()],
+        user: Dict[str, object] = authenticated,
     ) -> Dict[str, object]:
-        require_investigation(investigation_id)
+        require_investigation(investigation_id, user)
         filename = Path(file.filename or "").name
         extension = Path(filename).suffix.lower()
-        if extension not in VIDEO_EXTENSIONS:
+        if extension not in SUPPORTED_EXTENSIONS:
             raise HTTPException(
                 status_code=415,
-                detail="Phase 1 accepts video evidence in MP4 or MOV format",
+                detail="Supported evidence: MP4, MOV, JPG, JPEG, PNG, TXT, or PDF",
             )
         identifier = str(uuid4())
         target_dir = uploads / investigation_id / identifier
@@ -131,13 +245,17 @@ def create_app(
         return database.add_evidence(values)
 
     @app.get("/investigations/{investigation_id}/evidence")
-    def list_evidence(investigation_id: str) -> List[Dict[str, object]]:
-        require_investigation(investigation_id)
+    def list_evidence(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> List[Dict[str, object]]:
+        require_investigation(investigation_id, user)
         return database.list_evidence(investigation_id)
 
     @app.post("/investigations/{investigation_id}/process")
-    def process_investigation(investigation_id: str) -> Dict[str, object]:
-        require_investigation(investigation_id)
+    def process_investigation(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        require_investigation(investigation_id, user)
         evidence_items = database.list_evidence(investigation_id)
         if not evidence_items:
             raise HTTPException(status_code=409, detail="Upload evidence before processing")
@@ -148,7 +266,7 @@ def create_app(
             database.mark_processing(evidence_id)
             output_dir = analysis_root / investigation_id / evidence_id
             try:
-                manifest = process_video(
+                manifest = process_evidence(
                     Path(str(evidence["storage_path"])),
                     output_dir,
                     detector_factory(),
@@ -169,8 +287,10 @@ def create_app(
         }
 
     @app.get("/investigations/{investigation_id}/status")
-    def investigation_status(investigation_id: str) -> Dict[str, object]:
-        investigation = require_investigation(investigation_id)
+    def investigation_status(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        investigation = require_investigation(investigation_id, user)
         return {
             "investigation_id": investigation_id,
             "status": investigation["status"],
@@ -184,26 +304,17 @@ def create_app(
         }
 
     @app.get("/investigations/{investigation_id}/timeline")
-    def timeline(investigation_id: str) -> List[Dict[str, object]]:
-        require_investigation(investigation_id)
-        events = []
-        for evidence in database.list_evidence(investigation_id):
-            path = evidence.get("analysis_path")
-            if not path or not Path(str(path)).is_file():
-                continue
-            analysis = json.loads(Path(str(path)).read_text(encoding="utf-8"))
-            offset = float(evidence["effective_offset"])
-            for event in analysis.get("timeline", []):
-                event = dict(event)
-                event["evidence_id"] = evidence["evidence_id"]
-                event["local_timestamp_seconds"] = event["timestamp_seconds"]
-                event["timestamp_seconds"] = round(event["timestamp_seconds"] + offset, 6)
-                events.append(event)
-        return sorted(events, key=lambda event: event["timestamp_seconds"])
+    def timeline(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        require_investigation(investigation_id, user)
+        return build_unified_timeline(database.list_evidence(investigation_id))
 
     @app.get("/investigations/{investigation_id}/objects")
-    def objects(investigation_id: str) -> List[Dict[str, object]]:
-        require_investigation(investigation_id)
+    def objects(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> List[Dict[str, object]]:
+        require_investigation(investigation_id, user)
         observations = []
         for evidence in database.list_evidence(investigation_id):
             path = evidence.get("analysis_path")
@@ -215,13 +326,48 @@ def create_app(
                 )
         return observations
 
+    @app.get("/investigations/{investigation_id}/objects/matches")
+    def object_matches(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> List[Dict[str, object]]:
+        require_investigation(investigation_id, user)
+        matches = match_tracks(database.list_evidence(investigation_id))
+        reviews = database.match_reviews(investigation_id)
+        for match in matches:
+            review = reviews.get(str(match["match_id"]))
+            if review:
+                match["review_status"] = review["decision"]
+                match["review"] = review
+        return matches
+
+    @app.patch("/investigations/{investigation_id}/objects/matches/{match_id}")
+    def review_object_match(
+        investigation_id: str,
+        match_id: str,
+        payload: MatchReviewRequest,
+        user: Dict[str, object] = authenticated,
+    ) -> Dict[str, object]:
+        require_investigation(investigation_id, user)
+        available = {
+            str(item["match_id"])
+            for item in match_tracks(database.list_evidence(investigation_id))
+        }
+        if match_id not in available:
+            raise HTTPException(status_code=404, detail="Object match candidate not found")
+        return database.review_match(
+            investigation_id, match_id, payload.decision, payload.note
+        )
+
     @app.patch(
         "/investigations/{investigation_id}/evidence/{evidence_id}/synchronization"
     )
     def adjust_synchronization(
-        investigation_id: str, evidence_id: str, payload: SyncAdjustment
+        investigation_id: str,
+        evidence_id: str,
+        payload: SyncAdjustment,
+        user: Dict[str, object] = authenticated,
     ) -> Dict[str, object]:
-        require_investigation(investigation_id)
+        require_investigation(investigation_id, user)
         evidence = database.get_evidence(evidence_id)
         if evidence is None or evidence["investigation_id"] != investigation_id:
             raise HTTPException(status_code=404, detail="Evidence not found")
@@ -232,9 +378,58 @@ def create_app(
             "adjustment": adjustment,
         }
 
+    @app.post("/investigations/{investigation_id}/synchronize")
+    def automatically_synchronize(
+        investigation_id: str,
+        payload: SynchronizationRequest,
+        user: Dict[str, object] = authenticated,
+    ) -> Dict[str, object]:
+        require_investigation(investigation_id, user)
+        evidence_items = database.list_evidence(investigation_id)
+        analyzed = [
+            item
+            for item in evidence_items
+            if item["processing_status"] == "analyzed"
+            and Path(str(item["storage_path"])).suffix.lower() in {".mp4", ".mov"}
+        ]
+        if len(analyzed) < 2:
+            raise HTTPException(status_code=409, detail="Process at least two videos first")
+        reference_id = payload.reference_evidence_id or str(analyzed[0]["evidence_id"])
+        reference = next(
+            (item for item in analyzed if item["evidence_id"] == reference_id), None
+        )
+        if reference is None:
+            raise HTTPException(status_code=404, detail="Analyzed reference evidence not found")
+        reference_details = {
+            "offset_seconds": 0.0,
+            "confidence": 1.0,
+            "signals": [{"method": "reference", "offset_seconds": 0.0, "confidence": 1.0}],
+            "warning": None,
+        }
+        database.update_sync_estimate(reference_id, 0.0, 1.0, reference_details)
+        results = [{"evidence_id": reference_id, **reference_details}]
+        for evidence in analyzed:
+            if evidence["evidence_id"] == reference_id:
+                continue
+            result = synchronize_pair(reference, evidence, payload.max_offset_seconds).to_dict()
+            database.update_sync_estimate(
+                str(evidence["evidence_id"]),
+                float(result["offset_seconds"]),
+                float(result["confidence"]),
+                result,
+            )
+            results.append({"evidence_id": evidence["evidence_id"], **result})
+        database.set_investigation_status(
+            investigation_id,
+            "needs_review" if any(item.get("warning") for item in results) else "synchronized",
+        )
+        return {"reference_evidence_id": reference_id, "results": results}
+
     @app.get("/investigations/{investigation_id}/synchronization")
-    def synchronization(investigation_id: str) -> List[Dict[str, object]]:
-        require_investigation(investigation_id)
+    def synchronization(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> List[Dict[str, object]]:
+        require_investigation(investigation_id, user)
         return [
             {
                 "evidence_id": item["evidence_id"],
@@ -243,10 +438,52 @@ def create_app(
                 "manual_offset_seconds": item["manual_offset"],
                 "effective_offset_seconds": item["effective_offset"],
                 "confidence": item["sync_confidence"],
+                "details": item["sync_details"],
                 "history": database.adjustment_history(str(item["evidence_id"])),
             }
             for item in database.list_evidence(investigation_id)
         ]
+
+    @app.get("/investigations/{investigation_id}/summary")
+    def incident_summary(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        context = investigation_context(investigation_id, user)
+        search = search_factory()
+        search.index_context(context)
+        reasoner = reasoner_factory()
+        response = reasoner.summarize(context)
+        response["provider"] = reasoner.provider
+        database.save_ai_response(investigation_id, None, response, reasoner.provider)
+        return response
+
+    @app.post("/investigations/{investigation_id}/ask")
+    def ask_echotrace(
+        investigation_id: str,
+        payload: QuestionRequest,
+        user: Dict[str, object] = authenticated,
+    ) -> Dict[str, object]:
+        context = investigation_context(investigation_id, user)
+        search = search_factory()
+        search.index_context(context)
+        event_ids = search.search(payload.question, context)
+        context = filter_context_to_events(context, event_ids)
+        reasoner = reasoner_factory()
+        response = reasoner.answer(payload.question, context)
+        response["provider"] = reasoner.provider
+        database.save_ai_response(
+            investigation_id, payload.question, response, reasoner.provider
+        )
+        return response
+
+    @app.get("/investigations/{investigation_id}/graph")
+    def evidence_graph(
+        investigation_id: str, user: Dict[str, object] = authenticated
+    ) -> Dict[str, object]:
+        investigation = require_investigation(investigation_id, user)
+        evidence_items = database.list_evidence(investigation_id)
+        unified_timeline = build_unified_timeline(evidence_items)
+        return build_evidence_graph(investigation, evidence_items, unified_timeline)
 
     return app
 

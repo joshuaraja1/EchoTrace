@@ -14,6 +14,7 @@ class VideoMetadata:
     height: int
     fps: float
     has_audio: bool
+    creation_time: Optional[str] = None
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -57,4 +58,3 @@ class TimelineEvent:
 
 Manifest = Dict[str, object]
 ObservationList = List[Observation]
-

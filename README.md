@@ -91,7 +91,7 @@ echotrace-process-video camera-a.mp4 \
 See [docs/PHASE_1.md](docs/PHASE_1.md) for the implemented slice, remaining Phase 1 gate, and next
 steps. [docs/ROADMAP.md](docs/ROADMAP.md) is the canonical PRD implementation sequence.
 
-## Start the Phase 1 API
+## Start the reconstruction API
 
 ```bash
 source .venv/bin/activate
@@ -99,7 +99,8 @@ echotrace-api --reload
 ```
 
 Open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) for interactive API documentation.
-The local API supports the complete Phase 1 workflow:
+Register with `POST /auth/register`, copy the returned bearer token, and select **Authorize** in
+the interactive documentation. The API supports the reconstruction workflow:
 
 1. `POST /investigations`
 2. `POST /investigations/{id}/evidence` with an MP4 or MOV file
@@ -109,3 +110,8 @@ The local API supports the complete Phase 1 workflow:
 
 Original evidence is stored immutably under `data/evidence/`; its SHA-256 digest is recorded.
 Derived frames and analysis are stored separately under `data/analysis/`.
+
+Backend phases 2–4 add automatic multi-signal synchronization, unified incident time, cross-camera
+match candidates, evidence-grounded summaries/Q&A, and an inspectable evidence graph. See
+[docs/BACKEND.md](docs/BACKEND.md) for configuration and [docs/ROADMAP.md](docs/ROADMAP.md) for
+honest completion gates.

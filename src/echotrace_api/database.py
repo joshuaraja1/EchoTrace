@@ -12,8 +12,16 @@ from uuid import uuid4
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS investigations (
   investigation_id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(user_id),
   title TEXT NOT NULL,
   incident_type TEXT NOT NULL,
   incident_date TEXT NOT NULL,
@@ -36,6 +44,7 @@ CREATE TABLE IF NOT EXISTS evidence (
   estimated_offset REAL NOT NULL DEFAULT 0,
   manual_offset REAL,
   sync_confidence REAL,
+  sync_details_json TEXT,
   uploaded_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sync_adjustments (
@@ -43,6 +52,22 @@ CREATE TABLE IF NOT EXISTS sync_adjustments (
   evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) ON DELETE CASCADE,
   previous_offset REAL NOT NULL,
   new_offset REAL NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_responses (
+  response_id TEXT PRIMARY KEY,
+  investigation_id TEXT NOT NULL REFERENCES investigations(investigation_id) ON DELETE CASCADE,
+  question TEXT,
+  response_json TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS match_reviews (
+  review_id TEXT PRIMARY KEY,
+  investigation_id TEXT NOT NULL REFERENCES investigations(investigation_id) ON DELETE CASCADE,
+  match_id TEXT NOT NULL,
+  decision TEXT NOT NULL,
   note TEXT,
   created_at TEXT NOT NULL
 );
@@ -59,6 +84,17 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(evidence)").fetchall()
+            }
+            if "sync_details_json" not in columns:
+                connection.execute("ALTER TABLE evidence ADD COLUMN sync_details_json TEXT")
+            investigation_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(investigations)").fetchall()
+            }
+            if "user_id" not in investigation_columns:
+                connection.execute("ALTER TABLE investigations ADD COLUMN user_id TEXT")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -75,6 +111,7 @@ class Database:
         identifier = str(uuid4())
         values = {
             "investigation_id": identifier,
+            "user_id": payload["user_id"],
             "title": payload["title"],
             "incident_type": payload["incident_type"],
             "incident_date": payload["incident_date"],
@@ -86,17 +123,21 @@ class Database:
         }
         with self.connect() as connection:
             connection.execute(
-                """INSERT INTO investigations VALUES
-                (:investigation_id, :title, :incident_type, :incident_date, :approximate_time,
-                 :location, :description, :status, :created_at)""",
+                """INSERT INTO investigations
+                (investigation_id, user_id, title, incident_type, incident_date, approximate_time,
+                 location, description, status, created_at) VALUES
+                (:investigation_id, :user_id, :title, :incident_type, :incident_date,
+                 :approximate_time, :location, :description, :status, :created_at)""",
                 values,
             )
         return values
 
-    def list_investigations(self) -> List[Dict[str, object]]:
+    def list_investigations(self, user_id: str) -> List[Dict[str, object]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM investigations ORDER BY created_at DESC"
+                """SELECT * FROM investigations WHERE user_id = ?
+                ORDER BY created_at DESC""",
+                (user_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -104,6 +145,37 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM investigations WHERE investigation_id = ?", (identifier,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_user(self, name: str, email: str, password_hash: str) -> Dict[str, object]:
+        value = {
+            "user_id": str(uuid4()),
+            "name": name,
+            "email": email.lower(),
+            "password_hash": password_hash,
+            "created_at": utc_now(),
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO users (user_id, name, email, password_hash, created_at)
+                VALUES (:user_id, :name, :email, :password_hash, :created_at)""",
+                value,
+            )
+        return {key: item for key, item in value.items() if key != "password_hash"}
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, object]]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM users WHERE email = ?", (email.lower(),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, object]]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT user_id, name, email, created_at FROM users WHERE user_id = ?",
+                (user_id,),
             ).fetchone()
         return dict(row) if row else None
 
@@ -145,6 +217,8 @@ class Database:
     def _decode_evidence(row: sqlite3.Row) -> Dict[str, object]:
         value = dict(row)
         value["metadata"] = json.loads(value.pop("metadata_json")) if value["metadata_json"] else None
+        details = value.pop("sync_details_json", None)
+        value["sync_details"] = json.loads(details) if details else None
         value["effective_offset"] = (
             value["manual_offset"] if value["manual_offset"] is not None else value["estimated_offset"]
         )
@@ -173,6 +247,20 @@ class Database:
                 """UPDATE evidence SET processing_status = 'failed',
                 metadata_json = ? WHERE evidence_id = ?""",
                 (json.dumps({"error": message}), evidence_id),
+            )
+
+    def update_sync_estimate(
+        self,
+        evidence_id: str,
+        offset: float,
+        confidence: float,
+        details: Dict[str, object],
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """UPDATE evidence SET estimated_offset = ?, sync_confidence = ?,
+                sync_details_json = ? WHERE evidence_id = ?""",
+                (offset, confidence, json.dumps(details), evidence_id),
             )
 
     def set_investigation_status(self, identifier: str, status: str) -> None:
@@ -217,3 +305,54 @@ class Database:
                 (evidence_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def save_ai_response(
+        self,
+        investigation_id: str,
+        question: Optional[str],
+        response: Dict[str, object],
+        provider: str,
+    ) -> Dict[str, object]:
+        value = {
+            "response_id": str(uuid4()),
+            "investigation_id": investigation_id,
+            "question": question,
+            "response_json": json.dumps(response),
+            "provider": provider,
+            "created_at": utc_now(),
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO ai_responses VALUES
+                (:response_id, :investigation_id, :question, :response_json, :provider, :created_at)""",
+                value,
+            )
+        return {**value, "response": response}
+
+    def review_match(
+        self, investigation_id: str, match_id: str, decision: str, note: Optional[str]
+    ) -> Dict[str, object]:
+        value = {
+            "review_id": str(uuid4()),
+            "investigation_id": investigation_id,
+            "match_id": match_id,
+            "decision": decision,
+            "note": note,
+            "created_at": utc_now(),
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO match_reviews VALUES
+                (:review_id, :investigation_id, :match_id, :decision, :note, :created_at)""",
+                value,
+            )
+        return value
+
+    def match_reviews(self, investigation_id: str) -> Dict[str, Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM match_reviews WHERE investigation_id = ?
+                ORDER BY created_at""",
+                (investigation_id,),
+            ).fetchall()
+        return {str(row["match_id"]): dict(row) for row in rows}

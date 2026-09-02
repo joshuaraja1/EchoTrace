@@ -51,7 +51,9 @@ def create_test_video(path: Path) -> None:
 def test_phase_one_investigation_end_to_end(tmp_path: Path):
     source = tmp_path / "camera-a.mp4"
     create_test_video(source)
-    client = TestClient(create_app(tmp_path / "data", detector_factory=MovingCarDetector))
+    client = TestClient(
+        create_app(tmp_path / "data", detector_factory=MovingCarDetector, require_auth=False)
+    )
 
     created = client.post(
         "/investigations",
@@ -99,17 +101,30 @@ def test_phase_one_investigation_end_to_end(tmp_path: Path):
     assert synchronization[0]["history"][0]["previous_offset"] == 0
     assert synchronization[0]["history"][0]["note"] == "Aligned to visible test marker"
 
-    timeline = client.get(f"/investigations/{investigation_id}/timeline").json()
+    timeline = client.get(f"/investigations/{investigation_id}/timeline").json()["events"]
     objects = client.get(f"/investigations/{investigation_id}/objects").json()
     assert timeline[0]["event_type"] == "object_enters_scene"
-    assert timeline[0]["timestamp_seconds"] == 2.75
-    assert timeline[0]["frame_path"]
+    assert timeline[0]["global_timestamp_seconds"] == 2.75
+    assert timeline[0]["evidence"][0]["frame_path"]
     assert len(objects) == 2
     assert objects[0]["class_name"] == "car"
 
+    summary = client.get(f"/investigations/{investigation_id}/summary").json()
+    assert summary["citations"]
+    assert summary["provider"] == "local_evidence_rules"
+    answer = client.post(
+        f"/investigations/{investigation_id}/ask",
+        json={"question": "When did the car enter the scene?"},
+    ).json()
+    assert answer["citations"]
+    graph = client.get(f"/investigations/{investigation_id}/graph").json()
+    assert any(edge["relation"] == "supported_by" for edge in graph["edges"])
 
-def test_rejects_unsupported_evidence_without_writing_it(tmp_path: Path):
-    client = TestClient(create_app(tmp_path / "data"))
+
+def test_processes_text_evidence_and_rejects_unknown_types(tmp_path: Path):
+    client = TestClient(
+        create_app(tmp_path / "data", detector_factory=MovingCarDetector, require_auth=False)
+    )
     investigation = client.post(
         "/investigations",
         json={
@@ -119,8 +134,102 @@ def test_rejects_unsupported_evidence_without_writing_it(tmp_path: Path):
             "location": "Lab",
         },
     ).json()
+    text_response = client.post(
+        f"/investigations/{investigation['investigation_id']}/evidence",
+        files={"file": ("notes.txt", b"Witness observed a red vehicle.", "text/plain")},
+    )
+    assert text_response.status_code == 201
+    assert client.post(
+        f"/investigations/{investigation['investigation_id']}/process"
+    ).json()["processed"] == 1
+    answer = client.post(
+        f"/investigations/{investigation['investigation_id']}/ask",
+        json={"question": "What did the witness observe about the red vehicle?"},
+    ).json()
+    assert "red vehicle" in answer["answer"]
+    assert answer["citations"][0]["evidence_id"] == text_response.json()["evidence_id"]
     response = client.post(
         f"/investigations/{investigation['investigation_id']}/evidence",
-        files={"file": ("notes.txt", b"not video", "text/plain")},
+        files={"file": ("malware.exe", b"unsupported", "application/octet-stream")},
     )
     assert response.status_code == 415
+
+
+def test_automatic_synchronization_is_persisted(tmp_path: Path):
+    source = tmp_path / "shared.mp4"
+    create_test_video(source)
+    client = TestClient(
+        create_app(tmp_path / "data", detector_factory=MovingCarDetector, require_auth=False)
+    )
+    investigation_id = client.post(
+        "/investigations",
+        json={
+            "title": "Two Camera Test",
+            "incident_type": "vehicle collision",
+            "incident_date": "2026-09-02",
+            "location": "Lab",
+        },
+    ).json()["investigation_id"]
+    evidence_ids = []
+    for filename in ("camera-a.mp4", "camera-b.mp4"):
+        with source.open("rb") as video:
+            response = client.post(
+                f"/investigations/{investigation_id}/evidence",
+                files={"file": (filename, video, "video/mp4")},
+            )
+        evidence_ids.append(response.json()["evidence_id"])
+    assert client.post(f"/investigations/{investigation_id}/process").status_code == 200
+
+    response = client.post(
+        f"/investigations/{investigation_id}/synchronize",
+        json={"reference_evidence_id": evidence_ids[0], "max_offset_seconds": 5},
+    )
+    assert response.status_code == 200
+    assert response.json()["results"][1]["offset_seconds"] == 0
+    persisted = client.get(f"/investigations/{investigation_id}/synchronization").json()
+    assert persisted[1]["details"]["signals"][0]["method"] == "audio_gcc_phat"
+    assert persisted[1]["confidence"] >= 0.5
+    matches = client.get(f"/investigations/{investigation_id}/objects/matches").json()
+    assert matches[0]["review_status"] == "needs_review"
+    reviewed = client.patch(
+        f"/investigations/{investigation_id}/objects/matches/{matches[0]['match_id']}",
+        json={"decision": "confirmed", "note": "Same controlled vehicle"},
+    )
+    assert reviewed.status_code == 200
+    assert client.get(
+        f"/investigations/{investigation_id}/objects/matches"
+    ).json()[0]["review_status"] == "confirmed"
+
+
+def test_authentication_and_investigation_ownership(tmp_path: Path):
+    client = TestClient(create_app(tmp_path / "data"))
+    assert client.get("/investigations").status_code == 401
+    registration = client.post(
+        "/auth/register",
+        json={
+            "name": "Fleet Investigator",
+            "email": "investigator@example.com",
+            "password": "correct-horse-battery-staple",
+        },
+    )
+    assert registration.status_code == 201
+    token = registration.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    created = client.post(
+        "/investigations",
+        headers=headers,
+        json={
+            "title": "Authenticated Test",
+            "incident_type": "other",
+            "incident_date": "2026-09-02",
+            "location": "Lab",
+        },
+    )
+    assert created.status_code == 201
+    assert client.get("/investigations", headers=headers).json()[0]["title"] == "Authenticated Test"
+    login = client.post(
+        "/auth/login",
+        json={"email": "investigator@example.com", "password": "correct-horse-battery-staple"},
+    )
+    assert login.status_code == 200
+    assert login.json()["access_token"]
