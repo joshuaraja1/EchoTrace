@@ -45,6 +45,9 @@ def probe_video(path: Path) -> VideoMetadata:
     rate = video.get("avg_frame_rate", "0/1").split("/")
     fps = float(rate[0]) / float(rate[1]) if float(rate[1]) else 0.0
     duration = float(video.get("duration") or payload.get("format", {}).get("duration") or 0)
+    creation_time = video.get("tags", {}).get("creation_time") or payload.get("format", {}).get(
+        "tags", {}
+    ).get("creation_time")
     return VideoMetadata(
         path=str(path),
         duration_seconds=duration,
@@ -52,6 +55,7 @@ def probe_video(path: Path) -> VideoMetadata:
         height=int(video["height"]),
         fps=fps,
         has_audio=any(stream["codec_type"] == "audio" for stream in payload.get("streams", [])),
+        creation_time=creation_time,
     )
 
 
@@ -81,4 +85,3 @@ def extract_frames(path: Path, output_dir: Path, sample_fps: float = 2.0) -> Lis
     if not frames:
         raise MediaProcessingError(f"No frames extracted from {path}")
     return frames
-

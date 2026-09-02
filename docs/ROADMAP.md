@@ -88,6 +88,10 @@ satisfy Phase 2.
 Exit criterion: two to three controlled recordings synchronize automatically and expose confidence
 plus supporting alignment signals.
 
+Status: **software implementation complete**. Metadata, GCC-PHAT audio, and OpenCV visual-motion
+signals are fused and persisted with diagnostics. The controlled-footage accuracy exit criterion
+remains pending.
+
 ## Phase 3 — Unified timeline
 
 - global incident clock;
@@ -97,6 +101,10 @@ plus supporting alignment signals.
 - evidence references and clickable supporting intervals.
 
 Exit criterion: all analyzed sources produce one chronological, evidence-backed incident timeline.
+
+Status: **software implementation complete and tested**. Effective offsets map local events to a
+global clock; stable event IDs and source/frame citations are returned. Only eligible incident-level
+events are merged across cameras.
 
 ## Phase 4 — Azure AI layer
 
@@ -108,6 +116,10 @@ Exit criterion: all analyzed sources produce one chronological, evidence-backed 
 
 Exit criterion: incident summaries and answers are grounded only in investigation evidence and
 return inspectable citations.
+
+Status: **local grounded implementation complete; Azure adapters implemented but not deployed**.
+The default backend provides cited deterministic summaries/Q&A and an evidence graph. Optional
+Microsoft Foundry and Azure AI Search adapters require provisioned resources and credentials.
 
 ## Phase 5 — Competition UI
 
@@ -137,18 +149,19 @@ reported.
 
 ## Functional requirement traceability
 
-- FR-001 Authentication — Phase 5, pending.
+- FR-001 Authentication — backend registration/login, signed tokens, and owner scoping implemented;
+  UI remains Phase 5.
 - FR-002 Investigation creation — Phase 1 backend implemented; UI in Phase 5.
 - FR-003 Evidence upload — Phase 1 video upload implemented; other evidence types remain MVP work.
 - FR-004 Video processing — Phase 1 implemented.
-- FR-005 Object detection — adapter implemented; real-footage validation pending.
-- FR-006 Tracking — baseline implemented; upgrade and validation pending.
-- FR-007 Synchronization — Phase 0 audio baseline implemented; Phase 2 fusion pending.
+- FR-005 Object detection — adapter and multimodal processing implemented; real-footage validation pending.
+- FR-006 Tracking — baseline and cross-camera match candidates implemented; upgrade and validation pending.
+- FR-007 Synchronization — Phase 2 multi-signal fusion implemented; controlled validation pending.
 - FR-008 Event detection — entry, exit, stop, and direction-change candidates implemented.
-- FR-009 Timeline generation — Phase 3, pending.
+- FR-009 Timeline generation — Phase 3 unified evidence timeline implemented.
 - FR-010 Multi-camera playback — Phase 5, pending.
-- FR-011 Evidence links — frame citations exist in the baseline; complete timeline links pending.
-- FR-012 Confidence — baseline detection/synchronization confidence exists; fusion pending.
-- FR-013 Incident summary — Phase 4, pending.
-- FR-014 Question answering — Phase 4, pending.
+- FR-011 Evidence links — unified timeline, AI responses, and graph links implemented.
+- FR-012 Confidence — detection, event, synchronization fusion, and match confidence implemented.
+- FR-013 Incident summary — local grounded implementation complete; Azure deployment pending.
+- FR-014 Question answering — local grounded implementation complete; Azure deployment pending.
 - FR-015 Human corrections — audited manual sync implemented; full review controls in Phase 5.
