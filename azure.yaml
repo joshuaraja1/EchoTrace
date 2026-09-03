@@ -1,0 +1,16 @@
+name: echotrace
+services:
+  api:
+    project: .
+    host: containerapp
+    language: docker
+    docker:
+      path: Dockerfile
+      context: .
+  web:
+    project: web
+    host: containerapp
+    language: docker
+    docker:
+      path: Dockerfile
+      context: .

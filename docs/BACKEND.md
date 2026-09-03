@@ -35,7 +35,7 @@ directory unless `ECHOTRACE_JWT_SECRET` is configured.
 - `/investigations`: investigation lifecycle and owner scoping.
 - `/evidence`: immutable upload records and processing state.
 - `/process`: multimodal processing and derived artifacts.
-- `/synchronize`: metadata, audio, and visual-motion alignment fusion.
+- `/synchronize`: metadata, audio, visual-motion, and trajectory-event alignment fusion.
 - `/timeline`: local-to-global time mapping and evidence citations.
 - `/objects`: observations and cross-camera match review.
 - `/summary` and `/ask`: grounded incident intelligence.
@@ -82,6 +82,9 @@ The Search index must expose these fields: `id` (key), `investigation_id` (filte
 `content` (searchable), `event_type`, and `timestamp_seconds`. Azure calls use
 `DefaultAzureCredential`; credentials are not stored in source code.
 
+Private Azure AI Video Indexer is also supported for transcript, OCR, scene, label, and keyword
+enrichment. See [DEPLOYMENT.md](DEPLOYMENT.md) for its environment variables and safeguards.
+
 ## Runtime configuration
 
 - `ECHOTRACE_DATA_DIR`: local evidence/database root; default `./data`.
@@ -89,6 +92,7 @@ The Search index must expose these fields: `id` (key), `investigation_id` (filte
 - `ECHOTRACE_CORS_ORIGINS`: comma-separated frontend origins; defaults to local port 3000.
 - `ECHOTRACE_REASONER`: `local` or `azure`.
 - `ECHOTRACE_SEARCH`: `local` or `azure`.
+- `ECHOTRACE_VIDEO_INTELLIGENCE`: `local` or `azure`.
 
 ## Known deployment work
 

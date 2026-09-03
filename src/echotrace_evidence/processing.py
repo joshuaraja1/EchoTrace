@@ -9,7 +9,7 @@ from typing import Dict
 from pypdf import PdfReader
 
 from echotrace_video.detection import Detector
-from echotrace_video.events import detect_track_events
+from echotrace_video.events import detect_interaction_events, detect_track_events
 from echotrace_video.models import Observation
 from echotrace_video.opencv_analysis import analyze_frames
 from echotrace_video.pipeline import process_video
@@ -54,7 +54,12 @@ def process_image(path: Path, output_dir: Path, detector: Detector) -> Dict[str,
             },
             "frame_analysis": frame_analysis,
             "observations": [item.to_dict() for item in observations],
-            "timeline": [item.to_dict() for item in detect_track_events(observations)],
+            "timeline": [
+                item.to_dict()
+                for item in (
+                    detect_track_events(observations) + detect_interaction_events(observations)
+                )
+            ],
         },
     )
 

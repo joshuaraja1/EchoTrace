@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from echotrace_video.events import detect_track_events
+from echotrace_video.events import detect_interaction_events, detect_track_events
 from echotrace_video.models import Detection, Observation
 from echotrace_video.tracking import IoUTracker, intersection_over_union
 
@@ -43,3 +43,17 @@ def test_events_detect_possible_stop_and_direction_change():
     event_types = {event.event_type for event in detect_track_events(stopped + turning)}
     assert "vehicle_stops" in event_types
     assert "vehicle_changes_direction" in event_types
+
+
+def test_interaction_events_detect_convergence_and_possible_impact():
+    observations = []
+    for timestamp, first_x, second_x in ((0, 0, 80), (1, 20, 60), (2, 38, 42)):
+        observations.extend(
+            [
+                Observation(timestamp, f"f{timestamp}.jpg", 1, "car", 0.9, (first_x, 0, first_x + 20, 20)),
+                Observation(timestamp, f"f{timestamp}.jpg", 2, "truck", 0.88, (second_x, 0, second_x + 20, 20)),
+            ]
+        )
+    event_types = {event.event_type for event in detect_interaction_events(observations)}
+    assert "paths_converge" in event_types
+    assert "potential_impact" in event_types

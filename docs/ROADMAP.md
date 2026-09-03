@@ -135,6 +135,11 @@ Microsoft Foundry and Azure AI Search adapters require provisioned resources and
 Exit criterion: the three-camera staged collision demo works repeatedly, including the impact
 jump and the cited “five seconds before impact” answer.
 
+Status: **competition UI software implemented**. Authentication, dashboard, upload, status and
+failure handling, synchronized playback, event navigation, feed isolation, speed control, timeline,
+protected citations, Ask EchoTrace, object review, corrections, and the evidence graph are present.
+The repeated final three-camera showcase rehearsal remains pending the staged footage.
+
 ## Phase 6 — Validation
 
 - 20–50 controlled staged incidents over time;
@@ -147,21 +152,24 @@ jump and the cited “five seconds before impact” answer.
 No performance or business metric may be claimed until it is measured and the sample size is
 reported.
 
+Status: **evaluation software implemented; dataset execution pending**. The labeled-trial runner
+calculates every PRD metric and target gate, but controlled/public/negative datasets have not been
+supplied, so no accuracy claim is made.
+
 ## Functional requirement traceability
 
-- FR-001 Authentication — backend registration/login, signed tokens, and owner scoping implemented;
-  UI remains Phase 5.
-- FR-002 Investigation creation — Phase 1 backend implemented; UI in Phase 5.
-- FR-003 Evidence upload — Phase 1 video upload implemented; other evidence types remain MVP work.
+- FR-001 Authentication — registration/login, signed tokens, owner scoping, and UI implemented.
+- FR-002 Investigation creation — backend and dashboard workflow implemented.
+- FR-003 Evidence upload — MP4, MOV, JPG, JPEG, PNG, TXT, and PDF workflow implemented.
 - FR-004 Video processing — Phase 1 implemented.
 - FR-005 Object detection — adapter and multimodal processing implemented; real-footage validation pending.
 - FR-006 Tracking — baseline and cross-camera match candidates implemented; upgrade and validation pending.
 - FR-007 Synchronization — Phase 2 multi-signal fusion implemented; controlled validation pending.
-- FR-008 Event detection — entry, exit, stop, and direction-change candidates implemented.
+- FR-008 Event detection — all PRD MVP candidate types implemented.
 - FR-009 Timeline generation — Phase 3 unified evidence timeline implemented.
-- FR-010 Multi-camera playback — Phase 5, pending.
+- FR-010 Multi-camera playback — shared clock, event jump, isolation, and speed controls implemented.
 - FR-011 Evidence links — unified timeline, AI responses, and graph links implemented.
 - FR-012 Confidence — detection, event, synchronization fusion, and match confidence implemented.
 - FR-013 Incident summary — local grounded implementation complete; Azure deployment pending.
 - FR-014 Question answering — local grounded implementation complete; Azure deployment pending.
-- FR-015 Human corrections — audited manual sync implemented; full review controls in Phase 5.
+- FR-015 Human corrections — audited sync, event, identity, match, and confidence review implemented.

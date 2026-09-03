@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .detection import Detector, NullDetector
-from .events import detect_track_events
+from .events import detect_interaction_events, detect_track_events
 from .media import extract_frames, probe_video
 from .models import Manifest, Observation
 from .opencv_analysis import analyze_frames
@@ -40,7 +40,8 @@ def process_video(
                     detection.box,
                 )
             )
-    events = detect_track_events(observations)
+    events = detect_track_events(observations) + detect_interaction_events(observations)
+    events.sort(key=lambda item: item.timestamp_seconds)
     manifest: Manifest = {
         "schema_version": "1.0",
         "metadata": metadata.to_dict(),
