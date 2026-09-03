@@ -1,117 +1,98 @@
 # EchoTrace
 
-EchoTrace turns fragmented incident evidence into one synchronized, explainable timeline.
+**One timeline. Every perspective.**
 
-This repository currently contains the **Phase 0 technical feasibility spike**. It tests the
-project's highest-risk assumption before any application UI is built:
+EchoTrace is an evidence reconstruction engine for commercial fleet incidents. It accepts fragmented
+video, image, and document evidence; estimates a shared clock; builds an evidence-backed sequence;
+and answers investigator questions with citations. It reconstructs what the evidence appears to
+show and never assigns fault or liability.
 
-> Can independently started recordings of the same physical event be synchronized to within
-> 0.5 seconds in controlled conditions?
+## Implemented MVP
 
-## Current capability
+- Secure registration/login and owner-scoped investigations.
+- Immutable, SHA-256-fingerprinted MP4, MOV, JPG, PNG, TXT, and PDF evidence.
+- FFmpeg/OpenCV processing, optional YOLO detection, baseline tracking, and eight PRD event types.
+- Metadata, audio, visual-motion, and trajectory-event synchronization with visible confidence.
+- One chronological timeline with protected evidence/frame citations and audited corrections.
+- Cross-camera match candidates with investigator confirmation or rejection.
+- Grounded summary/Q&A through local rules or optional Microsoft Foundry and Azure AI Search.
+- Optional private Azure AI Video Indexer transcript, OCR, label, scene, and shot enrichment.
+- Interactive Next.js competition UI with three-camera playback, event jumps, Ask, and graph views.
+- Phase 6 evaluator for every technical metric specified by the PRD.
 
-The `echotrace-sync` CLI:
+## Run locally
 
-- extracts mono PCM audio from video/audio files with FFmpeg;
-- estimates each recording's offset against a chosen reference using GCC-PHAT correlation;
-- emits a machine-readable synchronization manifest;
-- reports confidence, peak quality, and warnings instead of hiding uncertainty.
-
-Offset convention: `global_time = local_media_time + offset_seconds`. A recording that began
-7 seconds after the reference should therefore receive an offset near `+7.0`.
-
-## Setup
-
-Requirements: Python 3.9+ and FFmpeg.
+Requirements: Python 3.9+, Node.js 22+, FFmpeg, and npm.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
+echotrace-api --reload
 ```
 
-## Run
+In a second terminal:
 
 ```bash
-echotrace-sync camera-a.mp4 camera-b.mp4 camera-c.mp4 \
-  --reference camera-a.mp4 \
-  --output artifacts/synchronization.json
+cd web
+npm install
+npm run dev
 ```
 
-For recordings with a known maximum separation, constrain the search to reduce false matches:
+Open the product at [http://127.0.0.1:3000](http://127.0.0.1:3000) and API documentation at
+[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+
+The containerized equivalent is:
 
 ```bash
-echotrace-sync camera-a.mp4 camera-b.mp4 --max-offset 30
+docker compose up --build
 ```
 
 ## Verify
 
 ```bash
-pytest
-ruff check .
-```
-
-Evaluate estimated offsets against measured ground truth:
-
-```bash
-echotrace-evaluate-sync artifacts/synchronization.json ground-truth.json \
-  --output artifacts/evaluation.json
-```
-
-Ground truth is a JSON object mapping source paths or unique filenames to offsets:
-
-```json
-{"camera-a.mp4": 0.0, "camera-b.mp4": 7.14, "camera-c.mp4": 13.02}
-```
-
-The real-world decision gate is documented in [docs/PHASE_0.md](docs/PHASE_0.md).
-
-## Phase 1A video pipeline
-
-The first Phase 1 slice can probe a video, sample evidence frames, run an optional YOLO model,
-track detections within that video, and emit a basic evidence-linked timeline:
-
-```bash
-echotrace-process-video camera-a.mp4 \
-  --output artifacts/camera-a \
-  --sample-fps 2
-```
-
-The default detector is `none`, which verifies metadata and frame extraction without downloading
-a model. To enable vehicle/person detection:
-
-```bash
-pip install -e '.[vision]'
-echotrace-process-video camera-a.mp4 \
-  --output artifacts/camera-a \
-  --detector yolo \
-  --model yolo11n.pt
-```
-
-See [docs/PHASE_1.md](docs/PHASE_1.md) for the implemented slice, remaining Phase 1 gate, and next
-steps. [docs/ROADMAP.md](docs/ROADMAP.md) is the canonical PRD implementation sequence.
-
-## Start the reconstruction API
-
-```bash
 source .venv/bin/activate
-echotrace-api --reload
+pytest
+ruff check src tests
+cd web && npm run lint && npm run build
 ```
 
-Open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) for interactive API documentation.
-Register with `POST /auth/register`, copy the returned bearer token, and select **Authorize** in
-the interactive documentation. The API supports the reconstruction workflow:
+Evaluate a labeled incident trial:
 
-1. `POST /investigations`
-2. `POST /investigations/{id}/evidence` with an MP4 or MOV file
-3. `POST /investigations/{id}/process`
-4. Review `/status`, `/objects`, and `/timeline`
-5. `PATCH /investigations/{id}/evidence/{evidence_id}/synchronization`
+```bash
+echotrace-evaluate-trial examples/validation/controlled-trial.json \
+  --output artifacts/validation/controlled-trial-report.json
+```
 
-Original evidence is stored immutably under `data/evidence/`; its SHA-256 digest is recorded.
-Derived frames and analysis are stored separately under `data/analysis/`.
+The included JSON is a schema example with illustrative numbers—not a published performance result.
 
-Backend phases 2–4 add automatic multi-signal synchronization, unified incident time, cross-camera
-match candidates, evidence-grounded summaries/Q&A, and an inspectable evidence graph. See
-[docs/BACKEND.md](docs/BACKEND.md) for configuration and [docs/ROADMAP.md](docs/ROADMAP.md) for
-honest completion gates.
+## Specialist CLIs
+
+Probe one video and emit evidence-linked analysis:
+
+```bash
+echotrace-process-video camera-a.mp4 --output artifacts/camera-a --sample-fps 2
+```
+
+Estimate direct source offsets:
+
+```bash
+echotrace-sync camera-a.mp4 camera-b.mp4 camera-c.mp4 \
+  --reference camera-a.mp4 --output artifacts/synchronization.json
+```
+
+Install optional YOLO support with `pip install -e '.[vision]'`. Install Azure adapters with
+`pip install -e '.[azure]'`.
+
+## Project truth
+
+The software path for PRD phases 0–6 is implemented. The product is not yet entitled to accuracy,
+availability, time-saved, or Imagine Cup readiness claims until the staged three-camera demo,
+controlled/public/negative datasets, Azure deployment, and customer validation are actually run.
+
+- [PRD traceability](docs/PRD_TRACEABILITY.md)
+- [Backend and Azure adapter configuration](docs/BACKEND.md)
+- [Deployment guide](docs/DEPLOYMENT.md)
+- [Canonical phase roadmap](docs/ROADMAP.md)
+- [Phase 0 measurement gate](docs/PHASE_0.md)
+- [Phase 1 pipeline notes](docs/PHASE_1.md)

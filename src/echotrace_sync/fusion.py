@@ -131,6 +131,52 @@ def visual_motion_signal(
     )
 
 
+def trajectory_event_signal(
+    reference_analysis: Dict[str, object],
+    target_analysis: Dict[str, object],
+    max_offset_seconds: float = 60.0,
+) -> Optional[SyncSignal]:
+    """Estimate alignment from shared trajectory-derived event landmarks."""
+    eligible = {
+        "vehicle_changes_direction",
+        "vehicle_stops",
+        "rapid_deceleration",
+        "paths_converge",
+        "potential_impact",
+        "post_impact_stop",
+    }
+    reference_by_type = {
+        str(event["event_type"]): event
+        for event in reference_analysis.get("timeline", [])
+        if event.get("event_type") in eligible
+    }
+    target_by_type = {
+        str(event["event_type"]): event
+        for event in target_analysis.get("timeline", [])
+        if event.get("event_type") in eligible
+    }
+    shared = sorted(set(reference_by_type) & set(target_by_type))
+    offsets = [
+        float(reference_by_type[event_type]["timestamp_seconds"])
+        - float(target_by_type[event_type]["timestamp_seconds"])
+        for event_type in shared
+    ]
+    offsets = [value for value in offsets if abs(value) <= max_offset_seconds]
+    if not offsets:
+        return None
+    offset = float(np.median(offsets))
+    spread = float(np.median(np.abs(np.array(offsets) - offset)))
+    agreement = float(np.exp(-spread))
+    coverage = min(1.0, len(offsets) / 3)
+    confidence = round(0.7 * agreement * coverage, 4)
+    return SyncSignal(
+        "trajectory_event_alignment",
+        round(offset, 6),
+        confidence,
+        {"shared_event_types": shared, "offset_candidates": offsets, "spread": spread},
+    )
+
+
 def fuse_signals(signals: Sequence[SyncSignal]) -> FusedSynchronization:
     usable = [signal for signal in signals if signal.confidence > 0]
     if not usable:
@@ -183,6 +229,11 @@ def synchronize_pair(
     visual = visual_motion_signal(reference_analysis, target_analysis, max_offset_seconds)
     if visual:
         signals.append(visual)
+    trajectory = trajectory_event_signal(
+        reference_analysis, target_analysis, max_offset_seconds
+    )
+    if trajectory:
+        signals.append(trajectory)
     return fuse_signals(signals)
 
 

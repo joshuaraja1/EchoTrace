@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing_extensions import Annotated
 
@@ -20,6 +21,11 @@ from echotrace_ai.context import build_evidence_context, filter_context_to_event
 from echotrace_ai.graph import build_evidence_graph
 from echotrace_ai.reasoning import EvidenceReasoner, create_reasoner
 from echotrace_ai.search import EvidenceSearch, create_search
+from echotrace_ai.video_intelligence import (
+    VideoIntelligence,
+    VideoIntelligenceError,
+    create_video_intelligence,
+)
 from echotrace_evidence import process_evidence
 from echotrace_sync.fusion import synchronize_pair
 from echotrace_timeline import build_unified_timeline
@@ -29,9 +35,11 @@ from echotrace_video.matching import match_tracks
 from .auth import TokenError, TokenService, hash_password, verify_password
 from .database import Database, utc_now
 from .schemas import (
+    EventCorrectionRequest,
     InvestigationCreate,
     LoginRequest,
     MatchReviewRequest,
+    ObjectCorrectionRequest,
     QuestionRequest,
     RegisterRequest,
     SyncAdjustment,
@@ -55,6 +63,7 @@ def create_app(
     detector_factory: Optional[Callable[[], Detector]] = None,
     reasoner_factory: Optional[Callable[[], EvidenceReasoner]] = None,
     search_factory: Optional[Callable[[], EvidenceSearch]] = None,
+    video_intelligence_factory: Optional[Callable[[], VideoIntelligence]] = None,
     require_auth: bool = True,
 ) -> FastAPI:
     root = Path(data_dir or os.environ.get("ECHOTRACE_DATA_DIR", "data")).resolve()
@@ -66,12 +75,13 @@ def create_app(
     detector_factory = detector_factory or NullDetector
     reasoner_factory = reasoner_factory or create_reasoner
     search_factory = search_factory or create_search
+    video_intelligence_factory = video_intelligence_factory or create_video_intelligence
     token_service = TokenService.from_data_dir(root)
     bearer = HTTPBearer(auto_error=False)
 
     app = FastAPI(
         title="EchoTrace Reconstruction API",
-        version="0.4.0",
+        version="0.6.0",
         description=(
             "Incident reconstruction and evidence-processing API. EchoTrace reconstructs evidence; "
             "it does not determine fault or liability."
@@ -127,12 +137,55 @@ def create_app(
     ) -> Dict[str, object]:
         investigation = require_investigation(identifier, user)
         evidence_items = database.list_evidence(identifier)
-        unified_timeline = build_unified_timeline(evidence_items)
-        return build_evidence_context(investigation, evidence_items, unified_timeline)
+        unified_timeline = public_timeline(
+            identifier, corrected_timeline(identifier, evidence_items)
+        )
+        context = build_evidence_context(investigation, evidence_items, unified_timeline)
+        context["objects"] = objects(identifier, user)
+        context["object_matches"] = object_matches(identifier, user)
+        return context
+
+    def corrected_timeline(
+        identifier: str, evidence_items: Optional[List[Dict[str, object]]] = None
+    ) -> Dict[str, object]:
+        result = build_unified_timeline(evidence_items or database.list_evidence(identifier))
+        corrections = database.event_corrections(identifier)
+        for event in result["events"]:
+            saved = corrections.get(str(event["event_id"]))
+            if saved:
+                event.update(saved["correction"])
+                event["review_status"] = "corrected"
+                event["correction"] = {
+                    "correction_id": saved["correction_id"],
+                    "note": saved["note"],
+                    "created_at": saved["created_at"],
+                }
+        result["events"].sort(key=lambda item: item["global_timestamp_seconds"])
+        return result
+
+    def public_evidence(item: Dict[str, object]) -> Dict[str, object]:
+        return {
+            key: value
+            for key, value in item.items()
+            if key not in {"storage_path", "analysis_path"}
+        }
+
+    def public_timeline(identifier: str, result: Dict[str, object]) -> Dict[str, object]:
+        for event in result["events"]:
+            for citation in event["evidence"]:
+                frame_path = citation.pop("frame_path", None)
+                if frame_path:
+                    base = f"/investigations/{identifier}/evidence/{citation['evidence_id']}"
+                    citation["frame_url"] = (
+                        f"{base}/frames/{Path(str(frame_path)).name}"
+                        if Path(str(frame_path)).parent.name == "frames"
+                        else f"{base}/content"
+                    )
+        return result
 
     @app.get("/health")
     def health() -> Dict[str, str]:
-        return {"status": "ok", "backend_phase": "4"}
+        return {"status": "ok", "backend_phase": "4", "implementation_phase": "6"}
 
     @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
     def register(payload: RegisterRequest) -> Dict[str, object]:
@@ -185,7 +238,9 @@ def create_app(
         investigation_id: str, user: Dict[str, object] = authenticated
     ) -> Dict[str, object]:
         investigation = require_investigation(investigation_id, user)
-        investigation["evidence"] = database.list_evidence(investigation_id)
+        investigation["evidence"] = [
+            public_evidence(item) for item in database.list_evidence(investigation_id)
+        ]
         return investigation
 
     @app.delete("/investigations/{investigation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -242,14 +297,52 @@ def create_app(
             "processing_status": "uploaded",
             "uploaded_at": utc_now(),
         }
-        return database.add_evidence(values)
+        return public_evidence(database.add_evidence(values))
 
     @app.get("/investigations/{investigation_id}/evidence")
     def list_evidence(
         investigation_id: str, user: Dict[str, object] = authenticated
     ) -> List[Dict[str, object]]:
         require_investigation(investigation_id, user)
-        return database.list_evidence(investigation_id)
+        return [public_evidence(item) for item in database.list_evidence(investigation_id)]
+
+    @app.get("/investigations/{investigation_id}/evidence/{evidence_id}/content")
+    def evidence_content(
+        investigation_id: str,
+        evidence_id: str,
+        user: Dict[str, object] = authenticated,
+    ) -> FileResponse:
+        require_investigation(investigation_id, user)
+        evidence = database.get_evidence(evidence_id)
+        if evidence is None or evidence["investigation_id"] != investigation_id:
+            raise HTTPException(status_code=404, detail="Evidence not found")
+        return FileResponse(
+            str(evidence["storage_path"]),
+            media_type=str(evidence["media_type"]),
+            filename=str(evidence["original_filename"]),
+        )
+
+    @app.get(
+        "/investigations/{investigation_id}/evidence/{evidence_id}/frames/{frame_name}"
+    )
+    def evidence_frame(
+        investigation_id: str,
+        evidence_id: str,
+        frame_name: str,
+        user: Dict[str, object] = authenticated,
+    ) -> FileResponse:
+        require_investigation(investigation_id, user)
+        evidence = database.get_evidence(evidence_id)
+        if evidence is None or evidence["investigation_id"] != investigation_id:
+            raise HTTPException(status_code=404, detail="Evidence not found")
+        analysis_path = evidence.get("analysis_path")
+        if not analysis_path:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        frames_dir = Path(str(analysis_path)).parent / "frames"
+        target = (frames_dir / Path(frame_name).name).resolve()
+        if target.parent != frames_dir.resolve() or not target.is_file():
+            raise HTTPException(status_code=404, detail="Evidence frame not found")
+        return FileResponse(str(target), media_type="image/jpeg")
 
     @app.post("/investigations/{investigation_id}/process")
     def process_investigation(
@@ -271,6 +364,29 @@ def create_app(
                     output_dir,
                     detector_factory(),
                 )
+                if Path(str(evidence["storage_path"])).suffix.lower() in {".mp4", ".mov"}:
+                    try:
+                        enrichment = video_intelligence_factory().enrich(
+                            Path(str(evidence["storage_path"]))
+                        )
+                        if enrichment:
+                            manifest["video_intelligence"] = enrichment
+                            extracted = [
+                                str(item.get("text", ""))
+                                for kind in ("transcript", "ocr")
+                                for item in enrichment.get(kind, [])
+                            ]
+                            manifest["extracted_text"] = "\n".join(
+                                text for text in extracted if text
+                            )
+                            (output_dir / "analysis.json").write_text(
+                                json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+                            )
+                    except (VideoIntelligenceError, httpx.HTTPError) as error:
+                        manifest["video_intelligence_warning"] = str(error)
+                        (output_dir / "analysis.json").write_text(
+                            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+                        )
                 database.mark_analyzed(
                     evidence_id, dict(manifest["metadata"]), output_dir / "analysis.json"
                 )
@@ -308,7 +424,32 @@ def create_app(
         investigation_id: str, user: Dict[str, object] = authenticated
     ) -> Dict[str, object]:
         require_investigation(investigation_id, user)
-        return build_unified_timeline(database.list_evidence(investigation_id))
+        return public_timeline(investigation_id, corrected_timeline(investigation_id))
+
+    @app.patch("/investigations/{investigation_id}/timeline/{event_id}")
+    def correct_timeline_event(
+        investigation_id: str,
+        event_id: str,
+        payload: EventCorrectionRequest,
+        user: Dict[str, object] = authenticated,
+    ) -> Dict[str, object]:
+        require_investigation(investigation_id, user)
+        timeline_result = corrected_timeline(investigation_id)
+        event = next(
+            (item for item in timeline_result["events"] if item["event_id"] == event_id), None
+        )
+        if event is None:
+            raise HTTPException(status_code=404, detail="Timeline event not found")
+        correction = {}
+        if payload.description is not None:
+            correction["description"] = payload.description
+        if payload.timestamp_seconds is not None:
+            correction["global_timestamp_seconds"] = payload.timestamp_seconds
+        if payload.confidence is not None:
+            correction["confidence"] = payload.confidence
+        return database.correct_event(
+            investigation_id, event_id, event, correction, payload.note
+        )
 
     @app.get("/investigations/{investigation_id}/objects")
     def objects(
@@ -324,7 +465,50 @@ def create_app(
                     {**item, "evidence_id": evidence["evidence_id"]}
                     for item in analysis.get("observations", [])
                 )
+        corrections = database.object_corrections(investigation_id)
+        for observation in observations:
+            saved = corrections.get(
+                (str(observation["evidence_id"]), int(observation["track_id"]))
+            )
+            if saved:
+                observation["canonical_identity"] = saved["canonical_identity"]
+                observation["review_status"] = "corrected"
+            frame_path = observation.pop("frame_path", None)
+            if frame_path:
+                base = (
+                    f"/investigations/{investigation_id}/evidence/{observation['evidence_id']}"
+                )
+                observation["frame_url"] = (
+                    f"{base}/frames/{Path(str(frame_path)).name}"
+                    if Path(str(frame_path)).parent.name == "frames"
+                    else f"{base}/content"
+                )
         return observations
+
+    @app.patch(
+        "/investigations/{investigation_id}/objects/tracks/{evidence_id}/{track_id}"
+    )
+    def correct_object_identity(
+        investigation_id: str,
+        evidence_id: str,
+        track_id: int,
+        payload: ObjectCorrectionRequest,
+        user: Dict[str, object] = authenticated,
+    ) -> Dict[str, object]:
+        require_investigation(investigation_id, user)
+        available = {
+            (str(item["evidence_id"]), int(item["track_id"]))
+            for item in objects(investigation_id, user)
+        }
+        if (evidence_id, track_id) not in available:
+            raise HTTPException(status_code=404, detail="Tracked object not found")
+        return database.correct_object(
+            investigation_id,
+            evidence_id,
+            track_id,
+            payload.canonical_identity,
+            payload.note,
+        )
 
     @app.get("/investigations/{investigation_id}/objects/matches")
     def object_matches(
@@ -482,8 +666,14 @@ def create_app(
     ) -> Dict[str, object]:
         investigation = require_investigation(investigation_id, user)
         evidence_items = database.list_evidence(investigation_id)
-        unified_timeline = build_unified_timeline(evidence_items)
-        return build_evidence_graph(investigation, evidence_items, unified_timeline)
+        unified_timeline = corrected_timeline(investigation_id, evidence_items)
+        return build_evidence_graph(
+            investigation,
+            evidence_items,
+            unified_timeline,
+            objects(investigation_id, user),
+            object_matches(investigation_id, user),
+        )
 
     return app
 

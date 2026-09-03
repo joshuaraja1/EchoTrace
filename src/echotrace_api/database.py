@@ -71,6 +71,24 @@ CREATE TABLE IF NOT EXISTS match_reviews (
   note TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS event_corrections (
+  correction_id TEXT PRIMARY KEY,
+  investigation_id TEXT NOT NULL REFERENCES investigations(investigation_id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL,
+  original_json TEXT NOT NULL,
+  correction_json TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS object_corrections (
+  correction_id TEXT PRIMARY KEY,
+  investigation_id TEXT NOT NULL REFERENCES investigations(investigation_id) ON DELETE CASCADE,
+  evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) ON DELETE CASCADE,
+  track_id INTEGER NOT NULL,
+  canonical_identity TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -356,3 +374,80 @@ class Database:
                 (investigation_id,),
             ).fetchall()
         return {str(row["match_id"]): dict(row) for row in rows}
+
+    def correct_event(
+        self,
+        investigation_id: str,
+        event_id: str,
+        original: Dict[str, object],
+        correction: Dict[str, object],
+        note: Optional[str],
+    ) -> Dict[str, object]:
+        value = {
+            "correction_id": str(uuid4()),
+            "investigation_id": investigation_id,
+            "event_id": event_id,
+            "original_json": json.dumps(original),
+            "correction_json": json.dumps(correction),
+            "note": note,
+            "created_at": utc_now(),
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO event_corrections VALUES
+                (:correction_id, :investigation_id, :event_id, :original_json,
+                 :correction_json, :note, :created_at)""",
+                value,
+            )
+        return {**value, "original": original, "correction": correction}
+
+    def event_corrections(self, investigation_id: str) -> Dict[str, Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM event_corrections WHERE investigation_id = ?
+                ORDER BY created_at""",
+                (investigation_id,),
+            ).fetchall()
+        return {
+            str(row["event_id"]): {
+                **dict(row),
+                "original": json.loads(row["original_json"]),
+                "correction": json.loads(row["correction_json"]),
+            }
+            for row in rows
+        }
+
+    def correct_object(
+        self,
+        investigation_id: str,
+        evidence_id: str,
+        track_id: int,
+        canonical_identity: str,
+        note: Optional[str],
+    ) -> Dict[str, object]:
+        value = {
+            "correction_id": str(uuid4()),
+            "investigation_id": investigation_id,
+            "evidence_id": evidence_id,
+            "track_id": track_id,
+            "canonical_identity": canonical_identity,
+            "note": note,
+            "created_at": utc_now(),
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO object_corrections VALUES
+                (:correction_id, :investigation_id, :evidence_id, :track_id,
+                 :canonical_identity, :note, :created_at)""",
+                value,
+            )
+        return value
+
+    def object_corrections(self, investigation_id: str) -> Dict[tuple, Dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM object_corrections WHERE investigation_id = ?
+                ORDER BY created_at""",
+                (investigation_id,),
+            ).fetchall()
+        return {(str(row["evidence_id"]), int(row["track_id"])): dict(row) for row in rows}

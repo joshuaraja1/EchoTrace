@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, time
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class RegisterRequest(BaseModel):
@@ -44,4 +44,22 @@ class QuestionRequest(BaseModel):
 
 class MatchReviewRequest(BaseModel):
     decision: str = Field(pattern=r"^(confirmed|rejected)$")
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class EventCorrectionRequest(BaseModel):
+    description: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    timestamp_seconds: Optional[float] = Field(default=None, ge=0, le=86_400)
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def require_change(self) -> EventCorrectionRequest:
+        if self.description is None and self.timestamp_seconds is None and self.confidence is None:
+            raise ValueError("At least one event field must be corrected")
+        return self
+
+
+class ObjectCorrectionRequest(BaseModel):
+    canonical_identity: str = Field(min_length=1, max_length=120)
     note: Optional[str] = Field(default=None, max_length=500)

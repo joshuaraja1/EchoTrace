@@ -11,3 +11,6 @@ graphify-out/
 artifacts/
 data/
 models/
+web/.next/
+web/node_modules/
+web/.env.local

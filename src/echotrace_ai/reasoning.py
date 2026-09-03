@@ -77,6 +77,127 @@ class LocalEvidenceReasoner:
     def answer(self, question: str, context: Dict[str, object]) -> Dict[str, object]:
         events = _events(context)
         lowered = question.lower()
+        impact = next(
+            (event for event in events if event.get("event_type") == "potential_impact"), None
+        )
+        before_match = re.search(
+            r"(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)"
+            r"\s+seconds?\s+before\s+(?:the\s+)?(?:impact|collision)",
+            lowered,
+        )
+        if impact and before_match:
+            number_words = {
+                "one": 1,
+                "two": 2,
+                "three": 3,
+                "four": 4,
+                "five": 5,
+                "six": 6,
+                "seven": 7,
+                "eight": 8,
+                "nine": 9,
+                "ten": 10,
+            }
+            raw_interval = before_match.group(1)
+            interval = float(number_words.get(raw_interval, raw_interval))
+            impact_time = float(impact["global_timestamp_seconds"])
+            target_time = max(0.0, impact_time - interval)
+            candidates = [
+                event
+                for event in events
+                if float(event["global_timestamp_seconds"]) <= impact_time
+                and event["event_id"] != impact["event_id"]
+            ]
+            closest = min(
+                candidates,
+                key=lambda event: abs(float(event["global_timestamp_seconds"]) - target_time),
+                default=None,
+            )
+            detail = (
+                f"The closest detected event was at estimated "
+                f"T+{float(closest['global_timestamp_seconds']):.2f}s: "
+                f"{str(closest['description']).rstrip('.').lower()}."
+                if closest
+                else "No separate detected event is recorded at that exact point."
+            )
+            cited = [event for event in (closest, impact) if event]
+            return {
+                "answer": (
+                    f"The potential impact is estimated at T+{impact_time:.2f}s, so {interval:g} "
+                    f"seconds before it is T+{target_time:.2f}s. {detail}"
+                ),
+                "citations": [_citation(event) for event in cited],
+                "confidence": round(min(float(event["confidence"]) for event in cited), 4),
+                "warning": "This answer uses estimated event times and does not assign fault.",
+            }
+        if impact and re.search(r"(?:immediately\s+)?after\s+(?:the\s+)?(?:impact|collision)", lowered):
+            impact_time = float(impact["global_timestamp_seconds"])
+            following = sorted(
+                [
+                    event
+                    for event in events
+                    if float(event["global_timestamp_seconds"]) > impact_time
+                ],
+                key=lambda event: float(event["global_timestamp_seconds"]),
+            )[:3]
+            if following:
+                details = " ".join(
+                    f"At estimated T+{float(event['global_timestamp_seconds']):.2f}s, "
+                    f"{str(event['description']).rstrip('.').lower()}."
+                    for event in following
+                )
+                return {
+                    "answer": f"After the potential impact at T+{impact_time:.2f}s: {details}",
+                    "citations": [_citation(impact), *[_citation(event) for event in following]],
+                    "confidence": round(
+                        min(float(event["confidence"]) for event in [impact, *following]), 4
+                    ),
+                    "warning": "This answer is limited to detected evidence and does not assign fault.",
+                }
+        if ("which video" in lowered or "which source" in lowered) and context.get("objects"):
+            sources = {
+                str(source["evidence_id"]): source for source in context.get("sources", [])
+            }
+            query_tokens = set(re.findall(r"[a-z0-9]+", lowered))
+            vehicle_types = {"car", "truck", "motorcycle", "bicycle"}
+            matching = []
+            seen = set()
+            for observation in context.get("objects", []):
+                label = str(
+                    observation.get("canonical_identity")
+                    or observation.get("class_name", "")
+                ).lower()
+                is_vehicle_query = "vehicle" in query_tokens and label in vehicle_types
+                identity_tokens = set(re.findall(r"[a-z0-9]+", label))
+                if not is_vehicle_query and not (identity_tokens & query_tokens):
+                    continue
+                evidence_id = str(observation["evidence_id"])
+                if evidence_id in seen:
+                    continue
+                seen.add(evidence_id)
+                source = sources.get(evidence_id, {})
+                matching.append(
+                    {
+                        "evidence_id": evidence_id,
+                        "source": source.get("filename", evidence_id),
+                        "type": "object_observation",
+                        "local_timestamp_seconds": observation.get("timestamp_seconds", 0),
+                        "global_timestamp_seconds": float(
+                            observation.get("timestamp_seconds", 0)
+                        )
+                        + float(source.get("effective_offset_seconds", 0)),
+                        "frame_url": observation.get("frame_url"),
+                        "confidence": observation.get("confidence", 0),
+                    }
+                )
+            if matching:
+                names = ", ".join(str(item["source"]) for item in matching)
+                return {
+                    "answer": f"The requested vehicle appears in these sources: {names}.",
+                    "citations": matching,
+                    "confidence": round(min(float(item["confidence"]) for item in matching), 4),
+                    "warning": "Object identity is an estimate unless confirmed by an investigator.",
+                }
         keywords = {
             token
             for token in re.findall(r"[a-z0-9]+", lowered)

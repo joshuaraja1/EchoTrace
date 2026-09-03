@@ -105,9 +105,36 @@ def test_phase_one_investigation_end_to_end(tmp_path: Path):
     objects = client.get(f"/investigations/{investigation_id}/objects").json()
     assert timeline[0]["event_type"] == "object_enters_scene"
     assert timeline[0]["global_timestamp_seconds"] == 2.75
-    assert timeline[0]["evidence"][0]["frame_path"]
+    assert timeline[0]["evidence"][0]["frame_url"]
     assert len(objects) == 2
     assert objects[0]["class_name"] == "car"
+    assert "storage_path" not in detail["evidence"][0]
+    assert client.get(
+        f"/investigations/{investigation_id}/evidence/{evidence_id}/content"
+    ).status_code == 200
+
+    corrected_event = client.patch(
+        f"/investigations/{investigation_id}/timeline/{timeline[0]['event_id']}",
+        json={
+            "description": "Investigator-confirmed vehicle entry",
+            "timestamp_seconds": 2.8,
+            "note": "Reviewed against visible marker",
+        },
+    )
+    assert corrected_event.status_code == 200
+    corrected_timeline = client.get(
+        f"/investigations/{investigation_id}/timeline"
+    ).json()["events"]
+    assert corrected_timeline[0]["description"] == "Investigator-confirmed vehicle entry"
+    assert corrected_timeline[0]["review_status"] == "corrected"
+
+    object_correction = client.patch(
+        f"/investigations/{investigation_id}/objects/tracks/{evidence_id}/1",
+        json={"canonical_identity": "Vehicle A", "note": "Confirmed by investigator"},
+    )
+    assert object_correction.status_code == 200
+    corrected_objects = client.get(f"/investigations/{investigation_id}/objects").json()
+    assert corrected_objects[0]["canonical_identity"] == "Vehicle A"
 
     summary = client.get(f"/investigations/{investigation_id}/summary").json()
     assert summary["citations"]
