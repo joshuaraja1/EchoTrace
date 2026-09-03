@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import NextImage from "next/image";
 import {
   ArrowDown,
   ArrowRight,
@@ -26,9 +27,9 @@ import { Mark } from "@/components/mark";
 import styles from "./landing.module.css";
 
 const evidence = [
-  { label: "DASHCAM_FRONT.MP4", offset: "+00:00.00", confidence: "97%", icon: Video, tone: "orange" },
-  { label: "LOADING_DOCK_04.MP4", offset: "+00:03.42", confidence: "91%", icon: Video, tone: "blue" },
-  { label: "WITNESS_AUDIO.M4A", offset: "−00:01.18", confidence: "84%", icon: AudioLines, tone: "green" },
+  { label: "DASHCAM_FRONT.MP4", offset: "+00:00.00", confidence: "97%", icon: Video, tone: "orange", image: "/evidence-preview/dashcam-van.webp", alt: "Dashcam view of an orange delivery van approaching an intersection" },
+  { label: "ROAD_CAMERA_04.MP4", offset: "+00:03.42", confidence: "91%", icon: Video, tone: "blue", image: "/evidence-preview/roadside-van.webp", alt: "Roadside camera view of an orange delivery van crossing an intersection" },
+  { label: "WITNESS_PHONE.MP4", offset: "−00:01.18", confidence: "84%", icon: Video, tone: "green", image: "/evidence-preview/witness-van.webp", alt: "Witness phone view of an orange delivery van on an industrial road" },
 ];
 
 const workflow = [
@@ -86,7 +87,7 @@ function ReconstructionFigure() {
         <span className={styles.figureStatus}>SYNC RESOLVED <i /></span>
       </div>
       <div className={styles.streams}>
-        {evidence.map(({ label, offset, confidence, icon: Icon, tone }, index) => (
+        {evidence.map(({ label, offset, confidence, icon: Icon, tone, image, alt }, index) => (
           <motion.div
             className={`${styles.stream} ${styles[tone]}`}
             key={label}
@@ -99,10 +100,16 @@ function ReconstructionFigure() {
               <span>{confidence} MATCH</span>
             </div>
             <div className={styles.cameraScene}>
+              <NextImage
+                className={styles.sceneImage}
+                src={image}
+                alt={alt}
+                fill
+                priority={index === 0}
+                sizes="(max-width: 780px) 32vw, (max-width: 1180px) 30vw, 16vw"
+              />
               <span className={styles.sceneTime}>14:32:{11 + index}.084</span>
-              <span className={`${styles.vehicle} ${styles[`vehicle${index + 1}`]}`} />
-              <span className={styles.horizon} />
-              <span className={styles.roadMark} />
+              <span className={styles.cameraReticle} aria-hidden="true" />
             </div>
             <div className={styles.waveform} aria-hidden="true">
               {[18, 42, 26, 66, 36, 78, 48, 28, 58, 82, 36, 54, 22, 70, 46, 30].map((height, bar) => (
